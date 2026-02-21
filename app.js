@@ -328,11 +328,19 @@ function togglePlayPause() {
         if (state.isPlaying) {
             ytPlayer.pauseVideo();
         } else {
+            // A地点が設定されている場合、A地点から再生
+            if (state.pointA !== null) {
+                seekTo(state.pointA);
+            }
             ytPlayer.playVideo();
         }
     } else if (state.mode === 'local') {
         if (!localPlayer.src || localPlayer.src === '') return;
         if (localPlayer.paused) {
+            // A地点が設定されている場合、A地点から再生
+            if (state.pointA !== null) {
+                seekTo(state.pointA);
+            }
             localPlayer.play().then(function() {
                 state.isPlaying = true;
                 updatePlayPauseIcon();
