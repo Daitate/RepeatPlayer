@@ -13,6 +13,21 @@ const state = {
 // === YouTube API ===
 let ytPlayer;
 let isYtReady = false;
+let ytApiLoadFailed = false;
+
+// YouTube APIスクリプトの読み込み失敗
+function onYtApiLoadError() {
+    ytApiLoadFailed = true;
+    console.error('YouTube IFrame APIの読み込みに失敗しました。');
+}
+
+// APIの読み込みタイムアウト検知（15秒）
+setTimeout(function() {
+    if (!isYtReady && !ytApiLoadFailed) {
+        ytApiLoadFailed = true;
+        console.error('YouTube IFrame APIの読み込みがタイムアウトしました。');
+    }
+}, 15000);
 
 // === DOM要素 ===
 const localPlayer = document.getElementById('local-player');
@@ -90,13 +105,27 @@ function onYouTubeIframeAPIReady() {
         videoId: '',
         playerVars: {
             playsinline: 1,
-            rel: 0
+            rel: 0,
+            origin: window.location.origin
         },
         events: {
             onReady: function() { isYtReady = true; },
-            onStateChange: onYtStateChange
+            onStateChange: onYtStateChange,
+            onError: onYtError
         }
     });
+}
+
+function onYtError(event) {
+    var messages = {
+        2: '無効な動画IDです。URLを確認してください。',
+        5: 'この動画はHTML5プレーヤーで再生できません。',
+        100: '動画が見つかりません（削除済みまたは非公開）。',
+        101: '動画の埋め込み再生が許可されていません。',
+        150: '動画の埋め込み再生が許可されていません。'
+    };
+    var code = event.data;
+    alert(messages[code] || 'YouTube動画の再生中にエラーが発生しました（コード: ' + code + '）');
 }
 
 function onYtStateChange(event) {
@@ -162,6 +191,11 @@ function resetDataForNewTrack() {
 function loadYouTube() {
     var url = document.getElementById('youtube-url').value.trim();
     var videoId = extractYtId(url);
+
+    if (ytApiLoadFailed) {
+        alert('YouTube APIの読み込みに失敗しました。\nインターネット接続を確認し、ページを再読み込みしてください。\n\n※ ローカルファイル（file://）から開いている場合は、HTTPサーバー経由でアクセスしてください。');
+        return;
+    }
 
     if (!isYtReady) {
         alert('YouTube APIの読み込み中です。しばらく待ってから再試行してください。');
