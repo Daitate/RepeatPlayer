@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Repeat Player</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <h1>Repeat Player</h1>
+            <div class="tabs">
+                <button id="tab-youtube" class="tab-btn active" onclick="switchMode('youtube')">YouTube</button>
+                <button id="tab-local" class="tab-btn" onclick="switchMode('local')">ローカルファイル</button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="player-section">
+                <!-- YouTube URL入力 -->
+                <div id="youtube-input-area" class="input-area active-area">
+                    <input type="text" id="youtube-url" placeholder="YouTube URLを入力..." onkeydown="if(event.key==='Enter')loadYouTube()">
+                    <button onclick="loadYouTube()">読み込み</button>
+                </div>
+
+                <!-- ローカルファイル入力 -->
+                <div id="local-input-area" class="input-area">
+                    <div class="file-drop-zone" id="file-drop-zone">
+                        <p>ファイルをドラッグ&ドロップ<br>またはクリックして選択</p>
+                        <input type="file" id="local-file" accept="audio/*,video/*" onchange="loadLocalFile(event)">
+                        <span id="file-name"></span>
+                    </div>
+                </div>
+
+                <!-- メディアコンテナ -->
+                <div class="media-container" id="media-container">
+                    <div id="youtube-player"></div>
+                    <video id="local-player" style="display:none;" preload="auto"></video>
+                </div>
+
+                <!-- コントロール -->
+                <div class="controls-panel">
+                    <!-- トランスポート -->
+                    <div class="transport-controls">
+                        <button class="transport-btn" onclick="skip(-5)" title="5秒戻る (←)">-5s</button>
+                        <button class="transport-btn play-btn" id="play-pause-btn" onclick="togglePlayPause()" title="再生/一時停止 (Space)">
+                            <span id="icon-play">&#9654;</span>
+                            <span id="icon-pause" style="display:none">&#9646;&#9646;</span>
+                        </button>
+                        <button class="transport-btn" onclick="skip(5)" title="5秒進む (→)">+5s</button>
+                    </div>
+
+                    <!-- タイムバー -->
+                    <div class="time-section">
+                        <span id="current-time-display" class="time-value">0:00</span>
+                        <div class="time-bar-container" id="time-bar-container" onmousedown="seekFromBar(event)">
+                            <div class="time-bar-track">
+                                <div class="time-bar-ab" id="time-bar-ab"></div>
+                                <div class="time-bar-progress" id="time-bar-progress"></div>
+                            </div>
+                        </div>
+                        <span id="duration-display" class="time-value">0:00</span>
+                    </div>
+
+                    <!-- ABリピート -->
+                    <div class="ab-controls">
+                        <button id="btn-mark" class="mark-btn mark-next-a" onclick="markPoint()" title="地点マーク (Mキー)">
+                            <span id="mark-label">A をマーク</span>
+                        </button>
+                        <div class="ab-display">
+                            <div class="ab-point-group">
+                                <span class="ab-tag ab-tag-a" id="btn-set-a">A</span>
+                                <span id="point-a-display" class="point-value point-editable" onclick="startEditPoint('A')" title="クリックで時間を直接入力">--:--</span>
+                                <input type="text" id="point-a-input" class="point-input" placeholder="0:00" style="display:none"
+                                       onkeydown="handlePointInputKey(event, 'A')" onblur="confirmPointInput('A')">
+                            </div>
+                            <span class="ab-arrow">&rarr;</span>
+                            <div class="ab-point-group">
+                                <span class="ab-tag ab-tag-b" id="btn-set-b">B</span>
+                                <span id="point-b-display" class="point-value point-editable" onclick="startEditPoint('B')" title="クリックで時間を直接入力">--:--</span>
+                                <input type="text" id="point-b-input" class="point-input" placeholder="0:00" style="display:none"
+                                       onkeydown="handlePointInputKey(event, 'B')" onblur="confirmPointInput('B')">
+                            </div>
+                        </div>
+                        <button id="btn-clear-ab" class="clear-btn" onclick="clearPoints()" title="A/Bクリア (Esc)">クリア</button>
+                        <div class="loop-toggle">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="loop-switch" checked onchange="toggleLoop()">
+                                <span class="slider"></span>
+                            </label>
+                            <span id="loop-status-text">ループON</span>
+                        </div>
+                    </div>
+
+                    <!-- 速度コントロール -->
+                    <div class="speed-controls">
+                        <span class="speed-label">速度</span>
+                        <div class="speed-presets">
+                            <button class="speed-preset" onclick="setSpeed(0.5)">0.5x</button>
+                            <button class="speed-preset" onclick="setSpeed(0.75)">0.75x</button>
+                            <button class="speed-preset active" onclick="setSpeed(1.0)">1.0x</button>
+                            <button class="speed-preset" onclick="setSpeed(1.25)">1.25x</button>
+                            <button class="speed-preset" onclick="setSpeed(1.5)">1.5x</button>
+                        </div>
+                        <input type="range" id="speed-slider" min="0.25" max="2.0" step="0.05" value="1.0" oninput="changeSpeed()">
+                        <span id="speed-display" class="speed-value">1.00x</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="memo-section">
+                <div class="memo-header">
+                    <h2>メモ / 採譜</h2>
+                    <button onclick="downloadMemo()" class="save-btn">保存</button>
+                </div>
+                <textarea id="memo-pad" placeholder="耳コピのメモやコード進行を記入...&#10;&#10;ショートカット:&#10;  Space = 再生/停止&#10;  ← → = 5秒スキップ&#10;  M = 地点マーク (A→B順)&#10;  Esc = A/Bクリア"></textarea>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <script src="app.js"></script>
+</body>
+</html>
