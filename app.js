@@ -10,6 +10,220 @@ const state = {
     currentBlobUrl: null   // メモリリーク防止用
 };
 
+// === セッション保存/復元 (localStorage + IndexedDB) ===
+
+var SESSION_KEY = 'repeatplayer_session';
+var DB_NAME = 'RepeatPlayerDB';
+var DB_STORE = 'files';
+
+function openFileDB() {
+    return new Promise(function(resolve, reject) {
+        var req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = function(e) {
+            e.target.result.createObjectStore(DB_STORE);
+        };
+        req.onsuccess = function(e) { resolve(e.target.result); };
+        req.onerror = function(e) { reject(e.target.error); };
+    });
+}
+
+function saveFileToDB(fileData, fileName, fileType) {
+    return openFileDB().then(function(db) {
+        return new Promise(function(resolve, reject) {
+            var tx = db.transaction(DB_STORE, 'readwrite');
+            var store = tx.objectStore(DB_STORE);
+            store.clear(); // 直前のファイルのみ保持
+            store.put({ data: fileData, name: fileName, type: fileType }, 'lastFile');
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = function(e) { reject(e.target.error); };
+        });
+    });
+}
+
+function loadFileFromDB() {
+    return openFileDB().then(function(db) {
+        return new Promise(function(resolve, reject) {
+            var tx = db.transaction(DB_STORE, 'readonly');
+            var store = tx.objectStore(DB_STORE);
+            var req = store.get('lastFile');
+            req.onsuccess = function() { resolve(req.result || null); };
+            req.onerror = function(e) { reject(e.target.error); };
+        });
+    });
+}
+
+function clearFileDB() {
+    return openFileDB().then(function(db) {
+        return new Promise(function(resolve, reject) {
+            var tx = db.transaction(DB_STORE, 'readwrite');
+            tx.objectStore(DB_STORE).clear();
+            tx.oncomplete = function() { resolve(); };
+            tx.onerror = function(e) { reject(e.target.error); };
+        });
+    });
+}
+
+function saveSession() {
+    var session = {
+        mode: state.mode,
+        pointA: state.pointA,
+        pointB: state.pointB,
+        isLoopEnabled: state.isLoopEnabled,
+        speed: state.speed,
+        youtubeUrl: document.getElementById('youtube-url').value,
+        memo: el.memo.value
+    };
+    try {
+        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    } catch (e) {
+        console.warn('セッション保存に失敗:', e);
+    }
+}
+
+function restoreSession() {
+    var raw;
+    try {
+        raw = localStorage.getItem(SESSION_KEY);
+    } catch (e) {
+        return;
+    }
+    if (!raw) return;
+
+    var session;
+    try {
+        session = JSON.parse(raw);
+    } catch (e) {
+        return;
+    }
+
+    // 速度の復元
+    if (typeof session.speed === 'number') {
+        state.speed = session.speed;
+        el.speedSlider.value = session.speed;
+        el.speedDisplay.textContent = session.speed.toFixed(2) + 'x';
+        updateSpeedPresets();
+    }
+
+    // ループの復元
+    if (typeof session.isLoopEnabled === 'boolean') {
+        state.isLoopEnabled = session.isLoopEnabled;
+        el.loopSwitch.checked = session.isLoopEnabled;
+        el.loopStatus.textContent = session.isLoopEnabled ? 'ループON' : 'ループOFF';
+    }
+
+    // メモの復元
+    if (session.memo) {
+        el.memo.value = session.memo;
+    }
+
+    // モードとメディアの復元
+    var restoreMode = session.mode || 'youtube';
+
+    if (restoreMode === 'youtube') {
+        if (session.youtubeUrl) {
+            document.getElementById('youtube-url').value = session.youtubeUrl;
+        }
+        // YouTube APIの準備完了を待ってから読み込み＆ABポイント復元
+        waitForYtReady(function() {
+            if (session.youtubeUrl && extractYtId(session.youtubeUrl)) {
+                var videoId = extractYtId(session.youtubeUrl);
+                el.mediaContainer.classList.remove('audio-mode');
+                ytPlayer.cueVideoById(videoId); // 自動再生しない
+                ytPlayer.setPlaybackRate(state.speed);
+
+                // メタデータ取得を待ってABポイントを復元
+                restoreAbPoints(session.pointA, session.pointB);
+            }
+        });
+    } else if (restoreMode === 'local') {
+        // モード切替（リセットなし版）
+        switchModeNoReset('local');
+
+        // IndexedDBからファイルを復元
+        loadFileFromDB().then(function(fileRecord) {
+            if (!fileRecord) return;
+
+            var blob = new Blob([fileRecord.data], { type: fileRecord.type });
+            var objectUrl = URL.createObjectURL(blob);
+
+            if (state.currentBlobUrl) {
+                URL.revokeObjectURL(state.currentBlobUrl);
+            }
+            state.currentBlobUrl = objectUrl;
+
+            var isAudio = fileRecord.type.startsWith('audio/');
+            if (isAudio) {
+                el.mediaContainer.classList.add('audio-mode');
+            } else {
+                el.mediaContainer.classList.remove('audio-mode');
+            }
+            el.fileName.textContent = fileRecord.name;
+
+            localPlayer.src = objectUrl;
+            localPlayer.load();
+            localPlayer.preservesPitch = true;
+            localPlayer.playbackRate = state.speed;
+
+            localPlayer.onloadedmetadata = function() {
+                state.mediaDuration = localPlayer.duration;
+                el.duration.textContent = formatTime(localPlayer.duration);
+                restoreAbPoints(session.pointA, session.pointB);
+            };
+        }).catch(function(e) {
+            console.warn('ファイル復元に失敗:', e);
+        });
+    }
+}
+
+function restoreAbPoints(pointA, pointB) {
+    if (pointA !== null && pointA !== undefined) {
+        state.pointA = pointA;
+        el.pointA.textContent = formatTimePrecise(pointA);
+        el.btnA.classList.add('set');
+    }
+    if (pointB !== null && pointB !== undefined) {
+        state.pointB = pointB;
+        el.pointB.textContent = formatTimePrecise(pointB);
+        el.btnB.classList.add('set');
+    }
+    updateAbBar();
+    updateMarkButton();
+}
+
+function waitForYtReady(callback) {
+    if (isYtReady) {
+        callback();
+    } else {
+        var check = setInterval(function() {
+            if (isYtReady) {
+                clearInterval(check);
+                callback();
+            }
+        }, 100);
+        // 10秒でタイムアウト
+        setTimeout(function() { clearInterval(check); }, 10000);
+    }
+}
+
+// モード切替（復元用：リセットしない版）
+function switchModeNoReset(mode) {
+    state.mode = mode;
+    document.getElementById('tab-youtube').classList.toggle('active', mode === 'youtube');
+    document.getElementById('tab-local').classList.toggle('active', mode === 'local');
+    document.getElementById('youtube-input-area').classList.toggle('active-area', mode === 'youtube');
+    document.getElementById('local-input-area').classList.toggle('active-area', mode === 'local');
+    var ytContainer = document.getElementById('youtube-player');
+    if (mode === 'youtube') {
+        ytContainer.style.display = 'block';
+        localPlayer.style.display = 'none';
+    } else {
+        ytContainer.style.display = 'none';
+        localPlayer.style.display = 'block';
+    }
+    state.isPlaying = false;
+    updatePlayPauseIcon();
+}
+
 // === YouTube API ===
 let ytPlayer;
 let isYtReady = false;
@@ -105,6 +319,7 @@ function onYtStateChange(event) {
         el.duration.textContent = formatTime(state.mediaDuration);
         state.isPlaying = true;
         updatePlayPauseIcon();
+        updateAbBar(); // セッション復元後にduration取得でABバーを表示
     } else if (event.data === YT.PlayerState.PAUSED) {
         state.isPlaying = false;
         updatePlayPauseIcon();
@@ -173,6 +388,8 @@ function loadYouTube() {
         el.mediaContainer.classList.remove('audio-mode');
         ytPlayer.loadVideoById(videoId);
         ytPlayer.setPlaybackRate(state.speed);
+        clearFileDB().catch(function() {}); // ローカルファイルデータを削除
+        saveSession();
     } else {
         alert('有効なYouTube URLを入力してください。');
     }
@@ -215,6 +432,18 @@ function loadLocalFile(event) {
     localPlayer.load();
     localPlayer.preservesPitch = true;
     localPlayer.playbackRate = state.speed;
+
+    // ファイルをIndexedDBに保存
+    var reader = new FileReader();
+    reader.onload = function() {
+        saveFileToDB(reader.result, file.name, file.type).then(function() {
+            saveSession();
+        }).catch(function(e) {
+            console.warn('ファイル保存に失敗:', e);
+            saveSession();
+        });
+    };
+    reader.readAsArrayBuffer(file);
 
     localPlayer.onloadedmetadata = function() {
         state.mediaDuration = localPlayer.duration;
@@ -352,6 +581,7 @@ function applySpeed(speed) {
     }
 
     updateSpeedPresets();
+    saveSession();
 }
 
 function updateSpeedPresets() {
@@ -369,6 +599,7 @@ function updateSpeedPresets() {
 function toggleLoop() {
     state.isLoopEnabled = el.loopSwitch.checked;
     el.loopStatus.textContent = state.isLoopEnabled ? 'ループON' : 'ループOFF';
+    saveSession();
 }
 
 // === ABリピート ===
@@ -412,6 +643,7 @@ function setPoint(point) {
 
     updateAbBar();
     updateMarkButton();
+    saveSession();
 }
 
 function clearPoints() {
@@ -423,6 +655,7 @@ function clearPoints() {
     if (el.btnB) el.btnB.classList.remove('set');
     updateAbBar();
     updateMarkButton();
+    saveSession();
 }
 
 function updateMarkButton() {
@@ -524,6 +757,7 @@ function confirmPointInput(point) {
 
     updateAbBar();
     updateMarkButton();
+    saveSession();
 }
 
 function cancelPointInput(point) {
@@ -623,7 +857,15 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// 監視ループ開始
+// メモ変更時に自動保存（入力が止まってから500ms後）
+var memoSaveTimer = null;
+el.memo.addEventListener('input', function() {
+    clearTimeout(memoSaveTimer);
+    memoSaveTimer = setTimeout(saveSession, 500);
+});
+
+// セッション復元＆監視ループ開始
+restoreSession();
 requestAnimationFrame(monitorLoop);
 
 // === メモ保存 ===
